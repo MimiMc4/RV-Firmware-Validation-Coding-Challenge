@@ -16,20 +16,20 @@ int main(int argc, char** argv) {
     const char *device = argv[1];
 
 
-    // Check permisions
+    // Verify read and write permissions
     if(access(device, R_OK | W_OK) != 0) {
         fprintf(stderr, "ERROR in access(): %s\n", strerror(errno));
         return 1;
     }
 
-    // Open device file
+    // Open device in non-blocking mode, bypassing terminal control restrictions
     int fd = open(device, O_RDWR | O_NOCTTY | O_NDELAY);
     if(fd == -1) {
         fprintf(stderr, "ERROR in open(): %s\n", strerror(errno));
         return 1;
     }
 
-    // Check if device is a tty
+    // Check if provided path is a valid terminal/serial device
     if(!isatty(fd)) {
         fprintf(stderr, "ERROR in isatty(): %s\n", strerror(errno));
         return 1;
@@ -42,56 +42,28 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    //
-    // Input flags - Turn off input processing
-    //
-    // convert break to null byte, no CR to NL translation,
-    // no NL to CR translation, don't mark parity errors or breaks
-    // no input parity check, don't strip high bit off,
-    // no XON/XOFF software flow control
-    //
+    // Raw mode: Disable input processing to prevent byte modifications
     config.c_iflag &= ~(IGNBRK | BRKINT | ICRNL |
                         INLCR | PARMRK | INPCK | ISTRIP | IXON);
 
-    //
-    // Output flags - Turn off output processing
-    //
-    // no CR to NL translation, no NL to CR-NL translation,
-    // no NL to CR translation, no column 0 CR suppression,
-    // no Ctrl-D suppression, no fill characters, no case mapping,
-    // no local output processing
-    //
-    // config.c_oflag &= ~(OCRNL | ONLCR | ONLRET |
-    //                     ONOCR | ONOEOT| OFILL | OLCUC | OPOST);
+
+    // Disable output processing
     config.c_oflag = 0;
 
-    //
-    // No line processing
-    //
-    // echo off, echo newline off, canonical mode off,
-    // extended input processing off, signal chars off
-    //
+    // Disable local line processing
     config.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN | ISIG);
 
-    //
-    // Turn off character processing
-    //
-    // clear current char size mask, no parity checking,
-    // no output processing, 8N1 configuration
-    //
+    // Hardware parameters [8N1]: 8 data bits, no parity, 1 stop bit
+    // Ignore modem control lines and enable the receiver.
     config.c_cflag &= ~(CSIZE | PARENB | CSTOPB);
     config.c_cflag |= (CS8 | CREAD | CLOCAL);
 
-    //
     // One input byte is enough to return from read()
     // Inter-character timer off
-    //
     config.c_cc[VMIN]  = 1;
     config.c_cc[VTIME] = 0;
 
-    //
-    // Communication speed: 9600B
-    //
+    // Set standard communication baud rate
     if(cfsetispeed(&config, B9600) < 0 || cfsetospeed(&config, B9600) < 0) {
         fprintf(stderr, "ERROR in cfsetispeed(): %s\n", strerror(errno));
         return 1;
@@ -103,17 +75,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // File descriptor polling info
+    // Set up polling for bidirectional I/O without blocking the execution thread
     struct pollfd fds[2];
-
     fds[0].fd = STDIN_FILENO;
     fds[0].events = POLLIN;
-
     fds[1].fd = fd;
     fds[1].events = POLLIN;
 
-
-    // Send test message
     const char* test_message = "This is a test message sent to the UART\n";
     write(fd, test_message, strlen(test_message));
 
@@ -125,12 +93,14 @@ int main(int argc, char** argv) {
             break;
         }
 
+        // Forward stdin to the serial device
         if (fds[0].revents & POLLIN) {
             if (read(STDIN_FILENO, &c, 1) > 0) {
                 write(fd, &c, 1);
             }
         }
 
+        // Forward serial device output to stdout
         if (fds[1].revents & POLLIN) {
             if (read(fd, &c, 1) > 0) {
                 write(STDOUT_FILENO, &c, 1);
@@ -139,7 +109,6 @@ int main(int argc, char** argv) {
 
     }
 
-
-    // Close device
     close(fd);
+    return 0;
 }
